@@ -15,38 +15,38 @@ namespace sv {
         T* ref;
 
     public:
-        explicit iterator(T* _ref, size_t _num = 0) : ref(_ref), num(_num) {}
+        explicit constexpr iterator(T* _ref, size_t _num = 0) : num(_num), ref(_ref) {}
 
-        iterator& operator++() {
+        constexpr iterator& operator++() {
             num++;
             return *this;
         }
-        iterator operator++(int) {
+        constexpr iterator operator++(int) {
             iterator retval = *this;
             ++(*this);
             return retval;
         }
-        iterator& operator--() {
+        constexpr iterator& operator--() {
             num--;
             return *this;
         }
-        iterator operator--(int) {
+        constexpr iterator operator--(int) {
             iterator retval = *this;
             --(*this);
             return retval;
         }
 
-        iterator operator+(int) {
+        constexpr iterator operator+(int) {
                 iterator retval = *this;
                 ++retval;
                 return retval;
         }
 
-        bool operator==(iterator other) const { return num == other.num; }
-        bool operator!=(iterator other) const { return !(*this == other); }
+        constexpr bool operator==(iterator other) const { return num == other.num; }
+        constexpr bool operator!=(iterator other) const { return !(*this == other); }
 
-        reference operator*() const { return ref[num]; }
+        constexpr reference operator*() const { return ref[num]; }
 
-        pointer operator->() { return &ref[num]; }
+        constexpr pointer operator->() { return &ref[num]; }
     };
 }

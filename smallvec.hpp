@@ -12,53 +12,64 @@ struct TaggedLen {
 private:
         size_t __len;
 public:
-        TaggedLen(): __len(0) {}
+        constexpr TaggedLen(): __len(0) {}
+        constexpr TaggedLen(TaggedLen &&o) {
+                __len = o.__len;
+                o.__len = 0;
+        }
+
+        constexpr
+        TaggedLen& operator = (TaggedLen &&o) {
+                __len = o.__len;
+                o.__len = 0;
+                return *this;
+        }
 
         auto operator=(auto n) = delete;
 
-        size_t get() const noexcept {
+        constexpr size_t get() const noexcept {
                 return __len >> 1;
         }
 
-        size_t operator*() const { return get(); }
+        constexpr size_t operator*() const { return get(); }
 
         void set_heap() {
                 __len |= 0b1;
         }
 
-        void inc() {
+        constexpr void inc() {
                 __len += 0b10;
         }
 
-        void set(size_t n) {
+        constexpr void set(size_t n) {
                 __len &= 0b1;
                 __len |= n << 1;
         }
 
-        void dec() {
+        constexpr void dec() {
                 size_t l = __len >> 1;
                 l -= 1;
                 __len &= 0b1;
                 __len |= l << 1;
         }
 
-        bool operator<=(size_t n) const {
+        constexpr bool operator<=(size_t n) const {
                 return this->get() <= n;
         }
 
-        bool operator>=(size_t n) const {
+        constexpr bool operator>=(size_t n) const {
                 return this->get() >= n;
         }
 
-        bool operator<(size_t n) const {
+        constexpr bool operator<(size_t n) const {
                 return this->get() < n;
         }
 
-        bool operator>(size_t n) const {
+        constexpr bool operator>(size_t n) const {
                 return this->get() > n;
         }
 
-        bool is_stack() const noexcept {
+        constexpr bool is_stack() const noexcept {
                 return (__len & 0b1) == 0;
         }
 };
@@ -78,6 +89,8 @@ public:
          * constructor. */
         std::unique_ptr<T, MallocDeleter> elems;
         size_t cap;
+
+        constexpr RawVec(): elems(nullptr), cap(0) {}
 };
 
 template <typename T>
@@ -100,15 +113,15 @@ private:
                 RawVec<T> heap;
                 T inlined[N];
 
-                _annon() {}
-                ~_annon() {}
+                constexpr _annon(): inlined() {}
+                constexpr ~_annon() {}
         } u;
 
-        inline T* ptr(size_t index = 0) noexcept {
+        constexpr inline T* ptr(size_t index = 0) noexcept {
                 return len.is_stack() ? &u.inlined[index] : &(u.heap.elems.get()[index]);
         }
 
-        inline const T* ptr(size_t index = 0) const noexcept {
+        constexpr inline const T* ptr(size_t index = 0) const noexcept {
                 return len.is_stack() ? &u.inlined[index] : &(u.heap.elems.get()[index]);
         }
 
@@ -144,40 +157,48 @@ public:
         using iterator = sv::iterator<T>;
         using iterator_const = sv::iterator<const T>;
 
-        smallvec() noexcept : len() {}
+        constexpr smallvec() noexcept = default;
 
-        ~smallvec() {
-                for (T &e : *this) {
-                        e.~T();
+        constexpr ~smallvec() {
+                if (len.get() > 0) {
+                        for (T &e : *this) {
+                                e.~T();
+                        }
                 }
                 if (!lives_on_stack()) {
                         u.heap.elems.reset();
                 }
         }
 
-        smallvec(smallvec<T, N> &&other) noexcept {
-                len = other.len;
-                u = other.u;
+        constexpr smallvec(smallvec<T, N> &&other) noexcept : len(), u() {
+                len = std::move(other.len);
+                if (other.lives_on_stack()) {
+                        std::move(
+                                        &other.u.inlined[0],
+                                        &other.u.inlined[other.size()],
+                                        &u.inlined[0]
+                        );
+                }
+                else
+                        u.heap = std::move(other.u.heap);
+
                 other.len = TaggedLen();
         }
 
-        smallvec(::std::initializer_list<T> l) : smallvec() {
-                __grow(l.size());
-                for (auto it = l.begin(); it != l.end(); it++){
-                        *ptr(*len) = *it;
-                        len.inc();
-                }
+        constexpr smallvec(::std::initializer_list<T> l) : smallvec() {
+                reserve_exact(l.size());
+                std::move(l.begin(), l.end(), ptr());
+                len.set(l.size());
         }
 
-        [[gnu::always_inline]]
-        inline void push_back(T elem) {
+        constexpr inline void push_back(T elem) {
                 reserve(1);
                 *ptr(*len) = std::move(elem);
                 len.inc();
         }
 
         template<class... Args>
-        void emplace_back(Args&&... args) {
+        inline void emplace_back(Args&&... args) {
                 push_back(std::move(T(args...)));
         }
 
@@ -185,18 +206,22 @@ public:
                 reserve(1);
                 T *elems = ptr();
                 if (len.get() > 0) {
-                        std::move_backward(elems, &elems[len.get()], &elems[len.get() + 1]);
+                        std::move_backward(
+                                elems,
+                                ptr(size()),
+                                ptr(size() + 1)
+                        );
                 }
                 elems[0] = std::move(elem);
                 len.inc();
         }
 
         template<class... Args>
-        void emplace_front(Args&&... args) {
+        inline void emplace_front(Args&&... args) {
                 push_front(std::move(T(args...)));
         }
 
-        void pop_back() {
+        constexpr void pop_back() {
                 if (len <= 0)
                         return;
                 len.dec();
@@ -211,17 +236,17 @@ public:
                 len.dec();
         }
 
-        void reserve(size_t n) {
+        constexpr void reserve(size_t n) {
                 if (len.get() + n > capacity())
                         __grow((len.get() + n) * 2);
         }
 
-        void reserve_exact(size_t n) {
+        constexpr void reserve_exact(size_t n) {
                 if (len.get() + n > capacity())
                         __grow(len.get() + n);
         }
 
-        void resize(size_t n, const T& value = T()) {
+        constexpr void resize(size_t n, const T& value = T()) {
                 reserve(n);
                 T *elems = ptr();
                 size_t cap = capacity();
@@ -234,27 +259,28 @@ public:
                 __grow(len.get());
         }
 
+        constexpr
         const T& operator [] (size_t i) const noexcept {
-                return ptr(i);
+                return *ptr(i);
         }
 
-        T& operator [] (size_t i) noexcept {
-                return ptr(i);
+        constexpr T& operator [] (size_t i) noexcept {
+                return *ptr(i);
         }
 
-        iterator begin() {
+        constexpr iterator begin() {
                 return iterator(ptr(), 0);
         }
 
-        iterator end() {
+        constexpr iterator end() {
                 return iterator(ptr(), len.get());
         }
 
-        iterator_const begin() const {
+        constexpr iterator_const begin() const {
                 return iterator_const(ptr(), 0);
         }
 
-        iterator_const end() const {
+        constexpr iterator_const end() const {
                 return iterator_const(ptr(), len.get());
         }
 
@@ -274,13 +300,14 @@ public:
                 }
         }
 
-        inline size_t size() const noexcept { return len.get(); }
+        constexpr inline size_t size() const noexcept { return len.get(); }
 
-        size_t capacity() const noexcept {
+        constexpr size_t capacity() const noexcept {
                 return len.get() <= N ? N : u.heap.cap;
         }
 
-        inline bool lives_on_stack() const noexcept {
+        constexpr inline
+        bool lives_on_stack() const noexcept {
                 return len.is_stack();
         }
 
