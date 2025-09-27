@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <optional>
+#include <type_traits>
 #include "iterator.hpp"
 
 namespace sv {
@@ -83,10 +85,11 @@ private:
                 }
         };
 public:
-        /* We need to use malloc and free, since we don't want to initialize
-         * any elements beforehand -which `new` always does.
-         * We want to be able to use vectors of types without a default
-         * constructor. */
+        /* We want to be able to use vectors of types without a default
+         * constructor.
+         * This forces us to use malloc and free, since we don't want to
+         * initialize the elements beforehand -which `new` always does.
+         */
         std::unique_ptr<T, MallocDeleter> elems;
         size_t cap;
 
@@ -96,10 +99,57 @@ public:
 template <typename T>
 const size_t MAX_STACK_CAPACITY_FOR = sizeof(RawVec<T>) / sizeof(T);
 
+/**
+ *  A dynamic array that allows to store a fixed number of elements on the stack
+ *  Just like std::string, it has a stack-based array for the first N elements; and
+ *  when the length grows over that initial capacity, switches to a heap-based buffer.
+ */
 template <
         typename T,
         size_t N
 > class smallvec;
+
+template<
+        typename T,
+        size_t N,
+        bool is_def_const = std::is_default_constructible_v<T>
+>
+union storage;
+
+template<typename T, size_t N>
+union storage<T, N, true> {
+        RawVec<T> heap;
+        T inlined[N];
+
+        constexpr
+        T* inlined_ptr() { return &inlined[0]; }
+
+        constexpr
+        const T* inlined_ptr() const { return &inlined[0]; }
+
+        constexpr storage(): inlined() {}
+        constexpr ~storage() {}
+};
+
+template<typename T, size_t N>
+union storage<T, N, false> {
+        RawVec<T> heap;
+        /* If T can't be default constructed, we can't declare an array of T */
+        alignas(T) char inlined[N * sizeof(T)];
+
+        /* This means that we won't be able to use the vector in constexpr code,
+         * since casting from char* to T* is not constexpr-safe :( */
+
+        constexpr
+        T* inlined_ptr() { return reinterpret_cast<T*>(&inlined[0]); }
+
+        constexpr
+        const T* inlined_ptr() const { return reinterpret_cast<T*>(&inlined[0]); }
+
+        constexpr storage(): inlined() {}
+        constexpr ~storage() {}
+};
+
 
 template<
         typename T,
@@ -109,20 +159,18 @@ class smallvec {
 private:
 
         TaggedLen len;
-        union _annon {
-                RawVec<T> heap;
-                T inlined[N];
-
-                constexpr _annon(): inlined() {}
-                constexpr ~_annon() {}
-        } u;
+        storage<T, N> store;
 
         constexpr inline T* ptr(size_t index = 0) noexcept {
-                return len.is_stack() ? &u.inlined[index] : &(u.heap.elems.get()[index]);
+                return len.is_stack() ?
+                       &store.inlined_ptr()[index]:
+                       &(store.heap.elems.get()[index]);
         }
 
         constexpr inline const T* ptr(size_t index = 0) const noexcept {
-                return len.is_stack() ? &u.inlined[index] : &(u.heap.elems.get()[index]);
+                return len.is_stack() ?
+                       &store.inlined_ptr()[index]:
+                       &(store.heap.elems.get()[index]);
         }
 
         inline void __switch_heap(size_t _n) {
@@ -131,9 +179,9 @@ private:
                 std::move(old, &old[len.get()], _new_elems);
                 len.set_heap();
 
-                u.heap.elems.release();
-                u.heap.elems.reset(_new_elems);
-                u.heap.cap = _n;
+                store.heap.elems.release();
+                store.heap.elems.reset(_new_elems);
+                store.heap.cap = _n;
         }
 
         inline void __grow(size_t _n) {
@@ -141,12 +189,12 @@ private:
                         __switch_heap(_n);
                 } else {
                         T *_new_elems = static_cast<T*>(std::malloc(_n * sizeof(T)));
-                        if (u.heap.elems) {
-                                std::move(u.heap.elems.get(), &(u.heap.elems.get())[len.get()], _new_elems);
+                        if (store.heap.elems) {
+                                std::move(store.heap.elems.get(), &(store.heap.elems.get())[len.get()], _new_elems);
                         }
 
-                        u.heap.elems.reset(_new_elems);
-                        u.heap.cap = _n;
+                        store.heap.elems.reset(_new_elems);
+                        store.heap.cap = _n;
                 }
         }
 
@@ -157,7 +205,7 @@ public:
         using iterator = sv::iterator<T>;
         using iterator_const = sv::iterator<const T>;
 
-        constexpr smallvec() noexcept = default;
+        constexpr smallvec() noexcept : len(), store() {}
 
         constexpr ~smallvec() {
                 if (len.get() > 0) {
@@ -166,21 +214,21 @@ public:
                         }
                 }
                 if (!lives_on_stack()) {
-                        u.heap.elems.reset();
+                        store.heap.elems.reset();
                 }
         }
 
-        constexpr smallvec(smallvec<T, N> &&other) noexcept : len(), u() {
+        constexpr smallvec(smallvec<T, N> &&other) noexcept : len(), store() {
                 len = std::move(other.len);
                 if (other.lives_on_stack()) {
                         std::move(
-                                        &other.u.inlined[0],
-                                        &other.u.inlined[other.size()],
-                                        &u.inlined[0]
+                                &other.store.inlined_ptr()[0],
+                                &other.store.inlined_ptr()[other.size()],
+                                &store.inlined_ptr()[0]
                         );
                 }
                 else
-                        u.heap = std::move(other.u.heap);
+                        store.heap = std::move(other.store.heap);
 
                 other.len = TaggedLen();
         }
@@ -191,6 +239,9 @@ public:
                 len.set(l.size());
         }
 
+        /**
+         * Pushes the given element to the back of the vector.
+         */
         constexpr inline void push_back(T elem) {
                 reserve(1);
                 *ptr(*len) = std::move(elem);
@@ -198,11 +249,14 @@ public:
         }
 
         template<class... Args>
-        inline void emplace_back(Args&&... args) {
+        constexpr inline void emplace_back(Args&&... args) {
                 push_back(std::move(T(args...)));
         }
 
-        inline void push_front(T elem) {
+        /**
+         * Pushes the given element to the start of the vector.
+         */
+        constexpr inline void push_front(T elem) {
                 reserve(1);
                 T *elems = ptr();
                 if (len.get() > 0) {
@@ -217,23 +271,28 @@ public:
         }
 
         template<class... Args>
-        inline void emplace_front(Args&&... args) {
+        constexpr inline void emplace_front(Args&&... args) {
                 push_front(std::move(T(args...)));
+        }
+
+        constexpr std::optional<T> remove(size_t index) {
+                std::optional<T> ret;
+                if (index <= size()) {
+                        ret = std::move(*ptr(index));
+                        std::move(ptr(index + 1), ptr(size()), ptr(index));
+                        len.dec();
+                }
+                return ret;
         }
 
         constexpr void pop_back() {
                 if (len <= 0)
                         return;
-                len.dec();
+                remove(len.get() - 1);
         }
 
-        void pop_front() {
-                if (len <= 0)
-                        return;
-                T *elems = ptr();
-                T ret = elems[0];
-                std::move_backward(&elems[1], &elems[len.get()], elems);
-                len.dec();
+        constexpr inline void pop_front() {
+                remove(0);
         }
 
         constexpr void reserve(size_t n) {
@@ -286,7 +345,7 @@ public:
 
         template <typename F>
         requires std::invocable<F, T&>
-        inline void for_each(F f) {
+        constexpr inline void for_each(F f) {
                 for (T &elem : *this) {
                         f(elem);
                 }
@@ -294,7 +353,7 @@ public:
 
         template <typename F>
         requires std::invocable<F, const T&>
-        inline void for_each(F f) const {
+        constexpr inline void for_each(F f) const {
                 for (const T &elem : *this) {
                         f(elem);
                 }
@@ -303,7 +362,7 @@ public:
         constexpr inline size_t size() const noexcept { return len.get(); }
 
         constexpr size_t capacity() const noexcept {
-                return len.get() <= N ? N : u.heap.cap;
+                return len.get() <= N ? N : store.heap.cap;
         }
 
         constexpr inline
@@ -311,11 +370,11 @@ public:
                 return len.is_stack();
         }
 
-        inline T* get_buffer() noexcept {
+        constexpr inline T* get_buffer() noexcept {
                 return ptr();
         }
 
-        inline const T* get_buffer() const noexcept {
+        constexpr inline const T* get_buffer() const noexcept {
                 return ptr();
         }
 };
