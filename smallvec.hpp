@@ -12,47 +12,47 @@ namespace sv {
 
 struct TaggedLen {
 private:
-        size_t __len;
+        size_t _len;
 public:
-        constexpr TaggedLen(): __len(0) {}
+        constexpr TaggedLen(): _len(0) {}
         constexpr TaggedLen(TaggedLen &&o) {
-                __len = o.__len;
-                o.__len = 0;
+                _len = o._len;
+                o._len = 0;
         }
 
         constexpr
         TaggedLen& operator = (TaggedLen &&o) {
-                __len = o.__len;
-                o.__len = 0;
+                _len = o._len;
+                o._len = 0;
                 return *this;
         }
 
         auto operator=(auto n) = delete;
 
         constexpr size_t get() const noexcept {
-                return __len >> 1;
+                return _len >> 1;
         }
 
         constexpr size_t operator*() const { return get(); }
 
         void set_heap() {
-                __len |= 0b1;
+                _len |= 0b1;
         }
 
         constexpr void inc() {
-                __len += 0b10;
+                _len += 0b10;
         }
 
         constexpr void set(size_t n) {
-                __len &= 0b1;
-                __len |= n << 1;
+                _len &= 0b1;
+                _len |= n << 1;
         }
 
         constexpr void dec() {
-                size_t l = __len >> 1;
+                size_t l = _len >> 1;
                 l -= 1;
-                __len &= 0b1;
-                __len |= l << 1;
+                _len &= 0b1;
+                _len |= l << 1;
         }
 
         constexpr bool operator<=(size_t n) const {
@@ -72,7 +72,7 @@ public:
         }
 
         constexpr bool is_stack() const noexcept {
-                return (__len & 0b1) == 0;
+                return (_len & 0b1) == 0;
         }
 };
 
@@ -161,16 +161,19 @@ private:
         TaggedLen len;
         storage<T, N> store;
 
+        static constexpr inline
+        auto ptr_impl(auto *self, size_t index) noexcept {
+                return self->len.is_stack() ?
+                       &self->store.inlined_ptr()[index]:
+                       &(self->store.heap.elems.get()[index]);
+        }
+
         constexpr inline T* ptr(size_t index = 0) noexcept {
-                return len.is_stack() ?
-                       &store.inlined_ptr()[index]:
-                       &(store.heap.elems.get()[index]);
+                return ptr_impl(this, index);
         }
 
         constexpr inline const T* ptr(size_t index = 0) const noexcept {
-                return len.is_stack() ?
-                       &store.inlined_ptr()[index]:
-                       &(store.heap.elems.get()[index]);
+                return ptr_impl(this, index);
         }
 
         inline void __switch_heap(size_t _n) {
@@ -360,6 +363,8 @@ public:
         }
 
         constexpr inline size_t size() const noexcept { return len.get(); }
+
+        constexpr inline bool is_empty() const noexcept { return len.get() == 0; }
 
         constexpr size_t capacity() const noexcept {
                 return len.get() <= N ? N : store.heap.cap;
