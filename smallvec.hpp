@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <type_traits>
+#include <stdexcept>
 
 namespace sv {
 
@@ -250,7 +251,13 @@ public:
         static const inline size_t STACK_CAP = N;
 
         using iterator = sv::iterator<T>;
-        using iterator_const = sv::iterator<const T>;
+        using const_iterator = sv::iterator<const T>;
+
+        using value_type = T;
+        using size_type = size_t;
+        using difference_type = ptrdiff_t;
+        using reference = value_type&;
+        using const_reference = const value_type&;
 
         constexpr smallvec() noexcept : len(), store() {}
 
@@ -297,7 +304,12 @@ public:
 
         template<class... Args>
         constexpr inline void emplace_back(Args&&... args) {
-                push_back(std::move(T(args...)));
+                reserve(1);
+                std::construct_at<T>(
+                    ptr(size()),
+                    std::forward<Args>(args)...
+                );
+                len.inc();
         }
 
         /**
@@ -319,7 +331,20 @@ public:
 
         template<class... Args>
         constexpr inline void emplace_front(Args&&... args) {
-                push_front(std::move(T(args...)));
+            reserve(1);
+            T* elems = ptr();
+            if (len.get() > 0) {
+                std::move_backward(
+                    elems,
+                    ptr(size()),
+                    ptr(size() + 1)
+                );
+            }
+            std::construct_at<T>(
+                ptr(0),
+                std::forward<Args>(args)...
+            );
+            len.inc();
         }
 
         constexpr std::optional<T> remove(size_t index) {
@@ -384,6 +409,20 @@ public:
                 return *ptr(i);
         }
 
+        constexpr
+        reference at(size_type pos) {
+            if (pos >= size())
+                throw std::out_of_range();
+            return *ptr(pos);
+        }
+
+        constexpr
+        const_reference at(size_type pos) const {
+            if (pos >= size())
+                throw std::out_of_range();
+            return *ptr(pos);
+        }
+
         constexpr iterator begin() {
                 return iterator(ptr(), 0);
         }
@@ -392,12 +431,12 @@ public:
                 return iterator(ptr(), len.get());
         }
 
-        constexpr iterator_const begin() const {
-                return iterator_const(ptr(), 0);
+        constexpr const_iterator begin() const {
+                return const_iterator(ptr(), 0);
         }
 
-        constexpr iterator_const end() const {
-                return iterator_const(ptr(), len.get());
+        constexpr const_iterator end() const {
+                return const_iterator(ptr(), len.get());
         }
 
         template <typename F>
@@ -418,7 +457,7 @@ public:
 
         constexpr inline size_t size() const noexcept { return len.get(); }
 
-        constexpr inline bool is_empty() const noexcept { return len.get() == 0; }
+        constexpr inline bool empty() const noexcept { return len.get() == 0; }
 
         constexpr size_t capacity() const noexcept {
                 return len.get() <= N ? N : store.heap.cap;
@@ -429,12 +468,12 @@ public:
                 return len.is_stack();
         }
 
-        constexpr inline T* get_buffer(size_t i = 0) noexcept {
-                return ptr(i);
+        constexpr inline T* data() noexcept {
+                return ptr();
         }
 
-        constexpr inline const T* get_buffer(size_t i = 0) const noexcept {
-                return ptr(i);
+        constexpr inline const T* data() const noexcept {
+                return ptr();
         }
 };
 
