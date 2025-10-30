@@ -389,6 +389,20 @@ public:
                 len.set(n);
         }
 
+        template<typename Gen>
+        constexpr void resize(size_t n, Gen generator)
+        requires requires(Gen g) {
+                { g() } -> std::convertible_to<T>;
+        }
+        {
+                reserve(n);
+                T *elems = ptr();
+                size_t cap = capacity();
+                for (size_t i = len.get(); i < n; i++)
+                        elems[i] = generator();
+                len.set(n);
+        }
+
         constexpr void resize(size_t n)
         requires
                 std::is_default_constructible_v<T>
