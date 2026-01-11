@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
@@ -100,20 +101,12 @@ public:
                 _len |= l << 1;
         }
 
-        constexpr bool operator<=(size_t n) const {
-                return this->get() <= n;
+        constexpr std::strong_ordering operator <=> (size_t n) const noexcept {
+                return this->get() <=> n;
         }
 
-        constexpr bool operator>=(size_t n) const {
-                return this->get() >= n;
-        }
-
-        constexpr bool operator<(size_t n) const {
-                return this->get() < n;
-        }
-
-        constexpr bool operator>(size_t n) const {
-                return this->get() > n;
+        constexpr std::strong_ordering operator <=> (TaggedLen len) const noexcept {
+                return this->get() <=> len.get();
         }
 
         constexpr bool is_stack() const noexcept {
@@ -377,15 +370,17 @@ public:
                         __grow(len.get() + n);
         }
 
-        constexpr void resize(size_t n, const T& value)
+        constexpr void resize(size_t n, T value)
         requires
                 std::is_copy_constructible_v<T>
         {
-                reserve(n);
+                if (n <= len.get())
+                        return;
+                reserve(n - len.get());
                 T *elems = ptr();
-                size_t cap = capacity();
-                for (size_t i = len.get(); i < cap; i++)
+                for (size_t i = len.get(); i < n - 1; i++)
                         elems[i] = value;
+                elems[n - 1] = std::move(value);
                 len.set(n);
         }
 
@@ -395,9 +390,10 @@ public:
                 { g() } -> std::convertible_to<T>;
         }
         {
-                reserve(n);
+                if (n <= len.get())
+                        return;
+                reserve(n - len.get());
                 T *elems = ptr();
-                size_t cap = capacity();
                 for (size_t i = len.get(); i < n; i++)
                         elems[i] = generator();
                 len.set(n);
@@ -426,14 +422,14 @@ public:
         constexpr
         reference at(size_type pos) {
             if (pos >= size())
-                throw std::out_of_range();
+                throw std::out_of_range("pos");
             return *ptr(pos);
         }
 
         constexpr
         const_reference at(size_type pos) const {
             if (pos >= size())
-                throw std::out_of_range();
+                throw std::out_of_range("pos");
             return *ptr(pos);
         }
 
